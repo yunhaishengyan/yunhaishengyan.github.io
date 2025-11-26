@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>杯赛得分记录器 (多人实时共享版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    
+    <!-- 引入 Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#165DFF',
+                        secondary: '#F53F3F',
+                        success: '#00B42A',
+                        neutral: '#1D2129',
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .content-auto { content-visibility: auto; }
+            .match-card-hover { @apply transition-all duration-200 hover:shadow-md hover:-translate-y-1; }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen font-sans text-neutral">
+    <!-- 顶部导航 -->
+    <header class="bg-white shadow-sm sticky top-0 z-10">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <h1 class="text-xl font-bold">杯赛得分记录器 (共享版)</h1>
+            <div id="user-status" class="text-sm text-gray-500"></div>
+        </div>
+    </header>
+
+    <!-- 主内容区 -->
+    <main class="container mx-auto px-4 py-6">
+        <!-- 功能导航 -->
+        <div class="flex flex-wrap gap-2 mb-6">
+            <button class="nav-tab active px-4 py-2 bg-primary text-white rounded-md" data-tab="group-stage">小组赛</button>
+            <button class="nav-tab px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-md" data-tab="knockout">淘汰赛</button>
+            <button class="nav-tab px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-md" data-tab="add-match">添加比赛</button>
+        </div>
+
+        <!-- 加载提示 -->
+        <div id="loading" class="text-center py-8">
+            <i class="fa fa-circle-o-notch fa-spin text-2xl text-primary"></i>
+            <p class="mt-2 text-gray-500">正在连接实时数据库...</p>
+        </div>
+
+        <!-- 错误提示 -->
+        <div id="error" class="hidden bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md mb-6">
+            <p><i class="fa fa-exclamation-circle mr-2"></i><span id="error-message">连接失败</span></p>
+        </div>
+
+        <!-- 小组赛页面 -->
+        <div class="tab-content active hidden" id="group-stage">
+            <!-- 内容与之前版本相同 -->
+            <div class="bg-white rounded-lg shadow-sm p-4 mb-6">
+                <h2 class="text-lg font-medium mb-4">小组赛积分榜</h2>
+                <div class="flex flex-wrap gap-2 mb-4">
+                    <button class="group-btn active px-3 py-1 bg-primary text-white rounded" data-group="A">A组</button>
+                    <button class="group-btn px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded" data-group="B">B组</button>
+                    <button class="group-btn px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded" data-group="C">C组</button>
+                    <button class="group-btn px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded" data-group="D">D组</button>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead><tr class="bg-gray-50"><th class="py-2 px-3 text-left">排名</th><th class="py-2 px-3 text-left">球队</th><th class="py-2 px-3 text-center">场次</th><th class="py-2 px-3 text-center">胜/平/负</th><th class="py-2 px-3 text-center">进球</th><th class="py-2 px-3 text-center">失球</th><th class="py-2 px-3 text-center">净胜球</th><th class="py-2 px-3 text-center font-bold">积分</th></tr></thead>
+                        <tbody id="group-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow-sm p-4">
+                <h2 class="text-lg font-medium mb-4">近期比赛</h2>
+                <div id="group-matches-container"></div>
+            </div>
+        </div>
+
+        <!-- 淘汰赛页面 -->
+        <div class="tab-content hidden" id="knockout">
+            <!-- 内容与之前版本相同 -->
+            <div class="bg-white rounded-lg shadow-sm p-4 mb-6">
+                <h2 class="text-lg font-medium mb-4">淘汰赛对阵</h2>
+                <div class="flex flex-wrap gap-2 mb-6">
+                    <button class="knockout-btn active px-3 py-1 bg-primary text-white rounded" data-stage="quarter">1/4决赛</button>
+                    <button class="knockout-btn px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded" data-stage="semi">半决赛</button>
+                    <button class="knockout-btn px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded" data-stage="final">决赛</button>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="knockout-matches-container"></div>
+            </div>
+        </div>
+
+        <!-- 添加比赛页面 -->
+        <div class="tab-content hidden" id="add-match">
+            <!-- 内容与之前版本相同 -->
+            <div class="bg-white rounded-lg shadow-sm p-6 max-w-md mx-auto">
+                <h2 class="text-lg font-medium mb-4">记录新比赛</h2>
+                <form id="match-form">
+                    <div class="mb-4"><label class="block text-sm font-medium mb-1">比赛类型</label><div class="flex gap-2"><label class="flex items-center"><input type="radio" name="match-type" value="group" checked class="mr-1"><span>小组赛</span></label><label class="flex items-center"><input type="radio" name="match-type" value="knockout" class="mr-1"><span>淘汰赛</span></label></div></div>
+                    <div class="mb-4" id="group-select-container"><label class="block text-sm font-medium mb-1">所属分组</label><select name="group" class="w-full p-2 border border-gray-300 rounded"><option value="A">A组</option><option value="B">B组</option><option value="C">C组</option><option value="D">D组</option></select></div>
+                    <div class="mb-4 hidden" id="knockout-stage-container"><label class="block text-sm font-medium mb-1">比赛阶段</label><select name="knockout-stage" class="w-full p-2 border border-gray-300 rounded"><option value="quarter">1/4决赛</option><option value="semi">半决赛</option><option value="final">决赛</option></select></div>
+                    <div class="mb-4"><label class="block text-sm font-medium mb-1">主队</label><input type="text" name="team1" placeholder="输入球队名称" class="w-full p-2 border border-gray-300 rounded" required></div>
+                    <div class="mb-4"><label class="block text-sm font-medium mb-1">客队</label><input type="text" name="team2" placeholder="输入球队名称" class="w-full p-2 border border-gray-300 rounded" required></div>
+                    <div class="mb-6"><label class="block text-sm font-medium mb-1">比分</label><div class="flex gap-2"><input type="number" name="score1" min="0" class="w-1/4 p-2 border border-gray-300 rounded text-center" required><span class="flex items-center font-bold">VS</span><input type="number" name="score2" min="0" class="w-1/4 p-2 border border-gray-300 rounded text-center" required></div></div>
+                    <button type="submit" class="w-full bg-primary text-white py-2 px-4 rounded hover:bg-primary/90 transition-colors">保存比赛结果</button>
+                </form>
+            </div>
+        </div>
+    </main>
+
+    <!-- 通知提示 -->
+    <div id="toast" class="fixed bottom-4 right-4 px-4 py-2 bg-success text-white rounded-md shadow-lg opacity-0 transition-opacity duration-300 flex items-center">
+        <i class="fa fa-check-circle mr-2"></i>
+        <span id="toast-message"></span>
+    </div>
+
+    <script>
+        // --- Firebase 初始化 ---
+        // 替换为你自己的 Firebase 配置
+        const firebaseConfig = {
+          apiKey: "YOUR_API_KEY",
+          authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+          databaseURL: "https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
+          projectId: "YOUR_PROJECT_ID",
+          storageBucket: "YOUR_PROJECT_ID.appspot.com",
+          messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+          appId: "YOUR_APP_ID"
+        };
+        
+        // 初始化 Firebase
+        const app = firebase.initializeApp(firebaseConfig);
+        const database = firebase.database();
+        const auth = firebase.auth();
+
+        // --- 应用逻辑 ---
+        class TournamentManager {
+            constructor() {
+                this.data = this.getDefaultData();
+                this.currentGroup = 'A';
+                this.currentKnockoutStage = 'quarter';
+                
+                this.initEventListeners();
+                this.setupFirebaseListeners();
+            }
+            
+            getDefaultData() {
+                return { groups: ['A', 'B', 'C', 'D'], teams: { 'A': [], 'B': [], 'C': [], 'D': [] }, groupMatches: [], knockoutMatches: { quarter: [], semi: [], final: [] } };
+            }
+
+            // --- Firebase 相关方法 ---
+            setupFirebaseListeners() {
+                // 匿名登录
+                auth.signInAnonymously().catch((error) => {
+                    this.showError(`登录失败: ${error.message}`);
+                });
+
+                // 监听登录状态变化
+                auth.onAuthStateChanged((user) => {
+                    if (user) {
+                        document.getElementById('user-status').textContent = `用户ID: ${user.uid.substring(0, 8)}`;
+                        this.startListeningToData();
+                    } else {
+                        document.getElementById('user-status').textContent = '未登录';
+                    }
+                });
+            }
+
+            startListeningToData() {
+                const dataRef = database.ref('tournamentData');
+                
+                // 监听数据变化
+                dataRef.on('value', (snapshot) => {
+                    const loadedData = snapshot.val();
+                    this.data = loadedData ? loadedData : this.getDefaultData();
+                    
+                    // 隐藏加载提示，显示内容
+                    document.getElementById('loading').classList.add('hidden');
+                    document.querySelector('.tab-content.active').classList.remove('hidden');
+
+                    this.renderAll();
+                    this.showToast('数据已同步');
+                }, (error) => {
+                    this.showError(`数据加载失败: ${error.message}`);
+                });
+            }
+
+            // 保存数据到 Firebase
+            saveData() {
+                return database.ref('tournamentData').set(this.data);
+            }
+            
+            // --- 数据操作方法 (与之前版本类似，但调用 saveData) ---
+            addMatch(match) {
+                // ... (与之前版本的逻辑完全相同)
+                if (match.type === 'group') {
+                    this.data.groupMatches.push({ id: Date.now(), group: match.group, team1: match.team1, team2: match.team2, score1: parseInt(match.score1), score2: parseInt(match.score2), date: new Date().toISOString() });
+                    this.updateTeamInGroup(match.group, match.team1);
+                    this.updateTeamInGroup(match.group, match.team2);
+                    this.updateTeamStats(match.group, match.team1, match.team2, match.score1, match.score2);
+                } else {
+                    this.data.knockoutMatches[match.stage].push({ id: Date.now(), stage: match.stage, team1: match.team1, team2: match.team2, score1: parseInt(match.score1), score2: parseInt(match.score2), date: new Date().toISOString() });
+                }
+                
+                // 使用 Firebase 保存
+                this.saveData().then(() => {
+                    this.showToast('比赛记录已保存并同步！');
+                }).catch((error) => {
+                    this.showError(`保存失败: ${error.message}`);
+                });
+                
+                return true;
+            }
+            
+            // updateTeamInGroup, updateTeamStats, renderAll, renderGroupTable, renderGroupMatches, renderKnockoutMatches
+            // ... (这些方法与之前版本完全相同，无需修改) ...
+            updateTeamInGroup(group, teamName) {
+                if (!this.data.teams[group].some(team => team.name === teamName)) {
+                    this.data.teams[group].push({ name: teamName, played: 0, wins: 0, draws: 0, losses: 0, goalsFor: 0, goalsAgainst: 0, goalDifference: 0, points: 0 });
+                }
+            }
+            updateTeamStats(group, team1, team2, score1, score2) {
+                const t1 = this.data.teams[group].find(t => t.name === team1);
+                const t2 = this.data.teams[group].find(t => t.name === team2);
+                if (!t1 || !t2) return; // 球队不存在则返回
+                
+                t1.played++; t2.played++;
+                t1.goalsFor += score1; t1.goalsAgainst += score2;
+                t2.goalsFor += score2; t2.goalsAgainst += score1;
+                t1.goalDifference = t1.goalsFor - t1.goalsAgainst;
+                t2.goalDifference = t2.goalsFor - t2.goalsAgainst;
+                
+                if (score1 > score2) { t1.wins++; t2.losses++; t1.points += 3; }
+                else if (score1 < score2) { t2.wins++; t1.losses++; t2.points += 3; }
+                else { t1.draws++; t2.draws++; t1.points += 1; t2.points += 1; }
+            }
+            renderAll() { this.renderGroupTable(); this.renderGroupMatches(); this.renderKnockoutMatches(); }
+            renderGroupTable() {
+                const tableBody = document.getElementById('group-table-body'); tableBody.innerHTML = '';
+                const teams = [...this.data.teams[this.currentGroup]].sort((a, b) => b.points - a.points || b.goalDifference - a.goalDifference);
+                teams.forEach((team, index) => {
+                    const row = document.createElement('tr'); row.className = index < 2 ? 'border-b bg-success/5' : 'border-b';
+                    row.innerHTML = `<td class="py-2 px-3">${index + 1}</td><td class="py-2 px-3 font-medium">${team.name}</td><td class="py-2 px-3 text-center">${team.played}</td><td class="py-2 px-3 text-center">${team.wins}/${team.draws}/${team.losses}</td><td class="py-2 px-3 text-center">${team.goalsFor}</td><td class="py-2 px-3 text-center">${team.goalsAgainst}</td><td class="py-2 px-3 text-center">${team.goalDifference}</td><td class="py-2 px-3 text-center font-bold">${team.points}</td>`;
+                    tableBody.appendChild(row);
+                });
+                if (teams.length === 0) tableBody.innerHTML = '<tr><td colspan="8" class="py-4 text-center text-gray-500">暂无球队数据</td></tr>';
+            }
+            renderGroupMatches() {
+                const container = document.getElementById('group-matches-container'); container.innerHTML = '';
+                const matches = this.data.groupMatches.filter(match => match.group === this.currentGroup).sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
+                if (matches.length === 0) { container.innerHTML = '<p class="text-center text-gray-500 py-4">暂无比赛记录</p>'; return; }
+                matches.forEach(match => {
+                    const card = document.createElement('div'); card.className = 'border-b pb-3 mb-3 last:border-0 last:mb-0 match-card-hover';
+                    const date = new Date(match.date);
+                    const formattedDate = `${date.getMonth() + 1}-${date.getDate()} ${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
+                    card.innerHTML = `<div class="flex justify-between items-center mb-1"><span class="text-sm text-gray-500">${formattedDate} · ${match.group}组</span></div><div class="flex justify-between items-center"><div class="text-left">${match.team1}</div><div class="flex items-center gap-4"><span class="font-bold">${match.score1}</span><span class="text-gray-500">VS</span><span class="font-bold">${match.score2}</span></div><div class="text-right">${match.team2}</div></div>`;
+                    container.appendChild(card);
+                });
+            }
+            renderKnockoutMatches() {
+                const container = document.getElementById('knockout-matches-container'); container.innerHTML = '';
+                const matches = this.data.knockoutMatches[this.currentKnockoutStage];
+                if (matches.length === 0) { container.innerHTML = '<p class="col-span-full text-center text-gray-500 py-4">暂无比赛记录</p>'; return; }
+                matches.forEach(match => {
+                    const card = document.createElement('div'); card.className = 'bg-gray-50 p-3 rounded match-card-hover';
+                    const date = new Date(match.date);
+                    const formattedDate = `${date.getMonth() + 1}-${date.getDate()} ${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
+                    card.innerHTML = `<div class="text-sm text-gray-500 mb-2">${formattedDate}</div><div class="flex justify-between items-center mb-1"><span>${match.team1}</span><span class="font-bold">${match.score1}</span></div><div class="flex justify-between items-center"><span>${match.team2}</span><span class="font-bold">${match.score2}</span></div>`;
+                    container.appendChild(card);
+                });
+            }
+            
+            // --- UI 交互方法 (与之前版本类似) ---
+            showToast(message) { /* ... 与之前版本相同 ... */
+                const toast = document.getElementById('toast'); const toastMessage = document.getElementById('toast-message');
+                toastMessage.textContent = message; toast.classList.remove('opacity-0'); toast.classList.add('opacity-100');
+                setTimeout(() => { toast.classList.remove('opacity-100'); toast.classList.add('opacity-0'); }, 3000);
+            }
+            showError(message) { /* ... 新增方法 ... */
+                document.getElementById('loading').classList.add('hidden');
+                const errorEl = document.getElementById('error');
+                const errorMessageEl = document.getElementById('error-message');
+                errorMessageEl.textContent = message;
+                errorEl.classList.remove('hidden');
+            }
+            initEventListeners() {
+                // ... (与之前版本基本相同) ...
+                document.querySelectorAll('.nav-tab').forEach(tab => {
+                    tab.addEventListener('click', () => {
+                        document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active', 'bg-primary', 'text-white'));
+                        tab.classList.add('active', 'bg-primary', 'text-white');
+                        const tabId = tab.getAttribute('data-tab');
+                        document.querySelectorAll('.tab-content').forEach(content => content.classList.add('hidden'));
+                        document.getElementById(tabId).classList.remove('hidden');
+                    });
+                });
+                document.querySelectorAll('.group-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        document.querySelectorAll('.group-btn').forEach(b => b.classList.remove('active', 'bg-primary', 'text-white'));
+                        btn.classList.add('active', 'bg-primary', 'text-white');
+                        this.currentGroup = btn.getAttribute('data-group'); this.renderGroupTable(); this.renderGroupMatches();
+                    });
+                });
+                document.querySelectorAll('.knockout-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        document.querySelectorAll('.knockout-btn').forEach(b => b.classList.remove('active', 'bg-primary', 'text-white'));
+                        btn.classList.add('active', 'bg-primary', 'text-white');
+                        this.currentKnockoutStage = btn.getAttribute('data-stage'); this.renderKnockoutMatches();
+                    });
+                });
+                document.querySelectorAll('input[name="match-type"]').forEach(radio => {
+                    radio.addEventListener('change', (e) => {
+                        const isGroup = e.target.value === 'group';
+                        document.getElementById('group-select-container').classList.toggle('hidden', !isGroup);
+                        document.getElementById('knockout-stage-container').classList.toggle('hidden', isGroup);
+                    });
+                });
+                document.getElementById('match-form').addEventListener('submit', (e) => {
+                    e.preventDefault(); const formData = new FormData(e.target);
+                    const matchData = {
+                        type: formData.get('match-type'), team1: formData.get('team1'), team2: formData.get('team2'),
+                        score1: formData.get('score1'), score2: formData.get('score2')
+                    };
+                    if (matchData.type === 'group') matchData.group = formData.get('group');
+                    else matchData.stage = formData.get('knockout-stage');
+                    
+                    if (this.addMatch(matchData)) {
+                        e.target.reset();
+                        if (matchData.type === 'group') document.querySelector('.nav-tab[data-tab="group-stage"]').click();
+                        else document.querySelector('.nav-tab[data-tab="knockout"]').click();
+                    }
+                });
+            }
+        }
+        
+        // 初始化应用
+        document.addEventListener('DOMContentLoaded', () => {
+            new TournamentManager();
+        });
+    </script>
+</body>
+</html>
